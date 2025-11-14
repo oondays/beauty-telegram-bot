@@ -266,17 +266,18 @@ async def refresh_slots(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_main_menu(update, context)
 
-async def cmd_booking(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not SLOTS:
-        await update.effective_message.reply_text("Нет доступных слотов.")
+async def cmd_mybooking(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user = update.effective_user
+    # --- Добавлено для отладки ---
+    print(f"DEBUG: USER_BOOKINGS = {USER_BOOKINGS}")
+    print(f"DEBUG: Текущий user_id = {user.id}")
+    # ----------------------------
+    booking_info = USER_BOOKINGS.get(user.id)
+    if not booking_info:
+        await update.effective_message.reply_text("У вас нет активной записи.")
         return
-    keyboard = [
-        [InlineKeyboardButton(slot, callback_data=f"select_{slot}")] for slot in SLOTS
-    ]
-    keyboard.append([InlineKeyboardButton("Обновить список", callback_data='refresh')])
-    keyboard.append([InlineKeyboardButton("Назад", callback_data='start')])
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await update.effective_message.reply_text("Выберите слот:", reply_markup=reply_markup)
+    slot = booking_info['slot']
+    await update.effective_message.reply_text(f"Вы записаны на: {slot}")
 
 # --- Изменение: Команда /mybooking теперь ведёт в то же меню ---
 async def cmd_mybooking(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -328,3 +329,4 @@ def main():
 
 if __name__ == '__main__':
     main()
+
