@@ -1,4 +1,3 @@
-# main.py
 import json
 import os
 from google.oauth2 import service_account
@@ -15,7 +14,7 @@ logging.basicConfig(
     level=logging.INFO
 )
 
-SCOPES = ['https://www.googleapis.com/auth/calendar']
+SCOPES = ['https://www.googleapis.com/auth/calendar'] # Убраны лишние пробелы
 
 def get_calendar_service():
     # Читаем ключ из переменной окружения
@@ -35,9 +34,7 @@ def get_calendar_service():
 
 # --- Глобальный список слотов ---
 SLOTS = []
-
-# --- Изменённая структура для хранения записей ---
-# Теперь USER_BOOKINGS[user_id] = [{'slot': '...', 'event_id': '...'}, {...}, ...]
+# Изменяем структуру: теперь USER_BOOKINGS[user_id] = [{'slot': '...', 'event_id': '...'}, ...]
 USER_BOOKINGS = {}
 
 # --- Функция генерации слотов (пример) ---
@@ -63,7 +60,7 @@ async def show_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     keyboard = [
         [InlineKeyboardButton("Записаться на процедуру", callback_data='booking')],
         [InlineKeyboardButton("Посмотреть мою запись", callback_data='mybooking')],
-        [InlineKeyboardButton("Отменить запись", callback_data='mybooking')], # Теперь ведёт в то же меню
+        [InlineKeyboardButton("Отменить запись", callback_data='cancel')],
         [InlineKeyboardButton("Информация о мастере", callback_data='info')],
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -125,11 +122,8 @@ async def confirm_booking(update: Update, context: ContextTypes.DEFAULT_TYPE):
     event_id = created_event.get('id')
     # Убираем слот из списка
     global SLOTS
-    if slot in SLOTS:
-        SLOTS.remove(slot)
-    else:
-        print(f"Предупреждение: Слот {slot} не найден в SLOTS при добавлении записи для пользователя {user.id}.")
-    # --- Изменение: Добавляем запись в список для пользователя ---
+    SLOTS.remove(slot)
+    # Добавляем запись в список записей пользователя
     if user.id not in USER_BOOKINGS:
         USER_BOOKINGS[user.id] = []
     USER_BOOKINGS[user.id].append({'slot': slot, 'event_id': event_id})
@@ -155,67 +149,49 @@ async def confirm_booking(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     await query.edit_message_text(text=f"✅ Вы записаны на {slot}! Спасибо.")
 
-# --- Изменение: Функция для просмотра всех записей ---
 async def mybooking(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     user = update.effective_user
     user_bookings = USER_BOOKINGS.get(user.id, [])
-    
     if not user_bookings:
         await query.edit_message_text(text="У вас нет активной записи.")
         return
 
-    # Сортировка записей по времени (от ближайшего)
-    sorted_bookings = sorted(user_bookings, key=lambda x: datetime.strptime(x['slot'], '%d.%m.%Y %H:%M'))
+    # Формируем сообщение со всеми записями пользователя
+    bookings_text = "Ваши записи:\n"
+    for i, booking in enumerate(user_bookings):
+        bookings_text += f"{i+1}. {booking['slot']}\n"
 
     keyboard = []
-    for booking in sorted_bookings:
-        slot = booking['slot']
-        # Создаём кнопку для отмены конкретного слота
-        keyboard.append([InlineKeyboardButton(f"❌ Отменить {slot}", callback_data=f"cancel_specific_{slot}")])
-    
-    keyboard.append([InlineKeyboardButton("Назад", callback_data='start')]) # Кнопка "Назад"
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(text="Ваши записи:", reply_markup=reply_markup)
+    # Создаем кнопки для отмены каждой записи
+    for i, booking in enumerate(user_bookings):
+        # Используем индекс записи в списке как идентификатор для отмены
+        keyboard.append([InlineKeyboardButton(f"❌ Отменить {booking['slot']}", callback_data=f"cancel_booking_action_{i}")])
+    keyboard.append([InlineKeyboardButton("Назад", callback_data='start')])
 
-# --- Новая функция для подтверждения отмены конкретного слота ---
-async def confirm_cancel_specific(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.edit_message_text(text=bookings_text, reply_markup=reply_markup)
+
+async def cancel_booking_action(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    slot_to_cancel = query.data.replace('cancel_specific_', '')
     user = update.effective_user
-    context.user_data['slot_to_cancel'] = slot_to_cancel # Сохраняем слот для отмены
-
-    keyboard = [
-        [InlineKeyboardButton("✅ Да, отменить", callback_data='execute_cancel')],
-        [InlineKeyboardButton("❌ Нет, вернуться", callback_data='mybooking')],
-    ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    await query.edit_message_text(text=f"Вы уверены, что хотите отменить запись на {slot_to_cancel}?", reply_markup=reply_markup)
-
-# --- Новая функция для выполнения отмены ---
-async def execute_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    slot_to_cancel = context.user_data.get('slot_to_cancel')
-    user = update.effective_user
-
-    if not slot_to_cancel:
-        await query.edit_message_text(text="Произошла ошибка при отмене записи.")
+    # Извлекаем индекс записи из callback_data
+    booking_index_str = query.data.replace('cancel_booking_action_', '')
+    try:
+        booking_index = int(booking_index_str)
+    except ValueError:
+        await query.edit_message_text(text="❌ Неверный запрос отмены.")
         return
 
     user_bookings = USER_BOOKINGS.get(user.id, [])
-    booking_to_cancel = None
-    for booking in user_bookings:
-        if booking['slot'] == slot_to_cancel:
-            booking_to_cancel = booking
-            break
-
-    if not booking_to_cancel:
-        await query.edit_message_text(text="Запись больше не найдена.")
+    if not user_bookings or booking_index < 0 or booking_index >= len(user_bookings):
+        await query.edit_message_text(text="❌ Запись не найдена или уже отменена.")
         return
 
+    booking_to_cancel = user_bookings[booking_index]
+    slot = booking_to_cancel['slot']
     event_id = booking_to_cancel['event_id']
 
     # Удаляем событие из календаря
@@ -230,16 +206,17 @@ async def execute_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await query.edit_message_text(text=f"❌ Ошибка при отмене записи: {e}")
         return
 
-    # Возвращаем слот в список
-    global SLOTS
-    SLOTS.append(slot_to_cancel)
-    # --- Изменение: Удаляем конкретную запись из списка пользователя ---
-    user_bookings.remove(booking_to_cancel)
-    # Удаляем ключ пользователя, если список записей пуст
+    # Удаляем запись из списка записей пользователя
+    del user_bookings[booking_index]
+    # Если у пользователя больше нет записей, удаляем его из словаря
     if not user_bookings:
         del USER_BOOKINGS[user.id]
 
-    await query.edit_message_text(text=f"❌ Запись на {slot_to_cancel} отменена и удалена из календаря.")
+    # Возвращаем слот в список
+    global SLOTS
+    SLOTS.append(slot)
+
+    await query.edit_message_text(text=f"❌ Запись на {slot} отменена и удалена из календаря.")
 
 async def info(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -266,45 +243,53 @@ async def refresh_slots(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await show_main_menu(update, context)
 
+async def cmd_booking(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not SLOTS:
+        await update.effective_message.reply_text("Нет доступных слотов.")
+        return
+    keyboard = [
+        [InlineKeyboardButton(slot, callback_data=f"select_{slot}")] for slot in SLOTS
+    ]
+    keyboard.append([InlineKeyboardButton("Обновить список", callback_data='refresh')])
+    keyboard.append([InlineKeyboardButton("Назад", callback_data='start')])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.effective_message.reply_text("Выберите слот:", reply_markup=reply_markup)
+
 async def cmd_mybooking(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
-    # --- Добавлено для отладки ---
-    print(f"DEBUG: USER_BOOKINGS = {USER_BOOKINGS}")
-    print(f"DEBUG: Текущий user_id = {user.id}")
-    # ----------------------------
-    booking_info = USER_BOOKINGS.get(user.id)
-    if not booking_info:
+    user_bookings = USER_BOOKINGS.get(user.id, [])
+    if not user_bookings:
         await update.effective_message.reply_text("У вас нет активной записи.")
         return
-    slot = booking_info['slot']
-    await update.effective_message.reply_text(f"Вы записаны на: {slot}")
 
-# --- Изменение: Команда /mybooking теперь ведёт в то же меню ---
-async def cmd_mybooking(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await show_main_menu(update, context)
-    # Или, если вы хотите сразу показать записи:
-    # user = update.effective_user
-    # user_bookings = USER_BOOKINGS.get(user.id, [])
-    # if not user_bookings:
-    #     await update.effective_message.reply_text("У вас нет активной записи.")
-    #     return
-    # sorted_bookings = sorted(user_bookings, key=lambda x: datetime.strptime(x['slot'], '%d.%m.%Y %H:%M'))
-    # message = "Ваши записи:\n" + "\n".join([f"- {booking['slot']}" for booking in sorted_bookings])
-    # await update.effective_message.reply_text(message)
+    # Формируем сообщение со всеми записями пользователя
+    bookings_text = "Ваши записи:\n"
+    for i, booking in enumerate(user_bookings):
+        bookings_text += f"{i+1}. {booking['slot']}\n"
+
+    await update.effective_message.reply_text(bookings_text)
 
 async def cmd_cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await show_main_menu(update, context) # Перенаправляем в меню просмотра записей
+    user = update.effective_user
+    user_bookings = USER_BOOKINGS.get(user.id, [])
+    if not user_bookings:
+        await update.effective_message.reply_text("У вас нет активной записи.")
+        return
 
-async def cmd_info(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = """
-🌸 Мастер красоты
-📍 Омск
-📞 +7 (999) 999-99-99
-🕒 Рабочие часы: 10:00 - 18:00
-🎁 Акции и скидки — в группе
-    """
-    await update.effective_message.reply_text(text)
+    # Формируем сообщение со всеми записями пользователя
+    bookings_text = "Ваши записи:\n"
+    for i, booking in enumerate(user_bookings):
+        bookings_text += f"{i+1}. {booking['slot']}\n"
 
+    # Создаем кнопки для отмены каждой записи (аналогично mybooking)
+    keyboard = []
+    for i, booking in enumerate(user_bookings):
+        keyboard.append([InlineKeyboardButton(f"❌ Отменить {booking['slot']}", callback_data=f"cancel_booking_action_{i}")])
+
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.effective_message.reply_text(text=bookings_text, reply_markup=reply_markup)
+
+# Обновляем обработчики для новых callback_data
 def main():
     TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
     if not TOKEN:
@@ -313,20 +298,17 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("booking", cmd_booking))
     application.add_handler(CommandHandler("mybooking", cmd_mybooking))
-    application.add_handler(CommandHandler("cancel", cmd_cancel))
-    application.add_handler(CommandHandler("info", cmd_info))
+    application.add_handler(CommandHandler("cancel", cmd_cancel)) # Командный хендлер теперь ведет к интерфейсу с кнопками
     application.add_handler(CallbackQueryHandler(show_main_menu, pattern='start'))
     application.add_handler(CallbackQueryHandler(booking, pattern='booking'))
     application.add_handler(CallbackQueryHandler(select_slot, pattern=r'^select_'))
     application.add_handler(CallbackQueryHandler(confirm_booking, pattern='confirm_booking'))
     application.add_handler(CallbackQueryHandler(mybooking, pattern='mybooking'))
-    # --- Новые обработчики ---
-    application.add_handler(CallbackQueryHandler(confirm_cancel_specific, pattern=r'^cancel_specific_'))
-    application.add_handler(CallbackQueryHandler(execute_cancel, pattern='execute_cancel'))
+    # Изменяем паттерн для отмены, чтобы он соответствовал новому формату callback_data
+    application.add_handler(CallbackQueryHandler(cancel_booking_action, pattern=r'^cancel_booking_action_'))
     application.add_handler(CallbackQueryHandler(info, pattern='info'))
     application.add_handler(CallbackQueryHandler(refresh_slots, pattern='refresh'))
     application.run_polling()
 
 if __name__ == '__main__':
     main()
-
